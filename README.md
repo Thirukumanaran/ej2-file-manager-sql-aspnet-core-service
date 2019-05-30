@@ -22,13 +22,13 @@ To configure the SQL server database connection use the `SetSQLConnection` metho
 
 ## How to run this application?
 
-To run this application, clone the [`ej2-file-manager-sql-aspnet-core-service`](https://github.com/SyncfusionExamples/ej2-file-manager-sql-aspnet-core-service) repository and then navigate to its appropriate path where it has been located in your system.
+To run this application, clone the [`ej2-file-manager-sql-aspnet-core-service`](https://github.com/SyncfusionExamples/ej2-file-manager-sql-server-database-aspnet-core-service) repository and then navigate to its appropriate path where it has been located in your system.
 
 To do so, open the command prompt and run the below commands one after the other.
 
 ```
 
-git clone https://github.com/SyncfusionExamples/ej2-file-manager-sql-aspnet-core-service.git  FileManagerSQLService
+git clone https://github.com/SyncfusionExamples/ej2-file-manager-sql-server-database-aspnet-core-service.git  FileManagerSQLService
 cd FileManagerSQLService
 
 ```
