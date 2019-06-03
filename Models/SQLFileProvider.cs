@@ -9,6 +9,8 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Serialization;
 using Microsoft.Extensions.Configuration;
 using System.IO;
+using Microsoft.Win32;
+using System.IO.Compression;
 
 namespace Syncfusion.EJ2.FileManager.Base.SQLFileProvider
 {
@@ -138,7 +140,7 @@ namespace Syncfusion.EJ2.FileManager.Base.SQLFileProvider
                             IsFile = (bool)reader["IsFile"],
                             DateModified = (DateTime)reader["DateModified"],
                             DateCreated = (DateTime)reader["DateCreated"],
-                            Type = "",
+                            Type = GetDefaultExtension(reader["MimeType"].ToString()),
                             Id = reader["ItemID"].ToString(),
                             HasChild = (bool)reader["HasChild"]
                         };
@@ -187,7 +189,7 @@ namespace Syncfusion.EJ2.FileManager.Base.SQLFileProvider
                         DateCreated = (DateTime)reader["DateCreated"],
                         HasChild = (bool)reader["HasChild"],
                         FilterPath = data.Length != 0 ? path : "/",
-                        Type = "",
+                        Type = GetDefaultExtension(reader["MimeType"].ToString()),
                         Id = reader["ItemID"].ToString()
                     };
                     files.Add(childFiles);
@@ -206,6 +208,11 @@ namespace Syncfusion.EJ2.FileManager.Base.SQLFileProvider
             readResponse.Files = files;
             readResponse.CWD = cwd;
             return readResponse;
+        }
+
+        internal IActionResult GetImage(string path, bool v, object p, FileManagerDirectoryContent[] data)
+        {
+            throw new NotImplementedException();
         }
 
         public FileManagerResponse CopyTo(string path, string targetPath, string[] names, string[] replacedItemNames, params object[] data)
@@ -313,19 +320,19 @@ namespace Syncfusion.EJ2.FileManager.Base.SQLFileProvider
                     while (myReader.Read())
                     {
                         fileContent = (byte[])myReader["Content"];
-                        if (File.Exists(Path.Combine(Path.GetTempPath(), names[0])))
+                        if (File.Exists(Path.Combine(Path.GetTempPath(), item.Name)))
                         {
-                            File.Delete(Path.Combine(Path.GetTempPath(), names[0]));
+                            File.Delete(Path.Combine(Path.GetTempPath(), item.Name));
                         }
-                        using (Stream file = File.OpenWrite(Path.Combine(Path.GetTempPath(), names[0])))
+                        using (Stream file = File.OpenWrite(Path.Combine(Path.GetTempPath(), item.Name)))
                         {
                             file.Write(fileContent, 0, fileContent.Length);
                         }
                         try
                         {
-                            FileStream fileStreamInput = new FileStream(Path.Combine(Path.GetTempPath(), names[0]), FileMode.Open, FileAccess.Read);
+                            FileStream fileStreamInput = new FileStream(Path.Combine(Path.GetTempPath(), item.Name), FileMode.Open, FileAccess.Read);
                             fileStreamResult = new FileStreamResult(fileStreamInput, "APPLICATION/octet-stream");
-                            fileStreamResult.FileDownloadName = data[0].Name;
+                            fileStreamResult.FileDownloadName = item.Name;
                         }
                         catch (Exception ex) { throw ex; }
                     }
@@ -398,9 +405,48 @@ namespace Syncfusion.EJ2.FileManager.Base.SQLFileProvider
             return getDetailResponse;
         }
 
-        public FileStreamResult GetImage(string path, bool allowCompress, params object[] data)
+        public static string GetDefaultExtension(string mimeType)
         {
-            throw new NotImplementedException();
+            string result;
+            RegistryKey key;
+            object value;
+
+            key = Registry.ClassesRoot.OpenSubKey(@"MIME\Database\Content Type\" + mimeType.Trim(), false);
+            value = key != null ? key.GetValue("Extension", null) : null;
+            result = value != null ? value.ToString() : string.Empty;
+
+            return result;
+        }
+
+        public FileStreamResult GetImage(string path,  bool allowCompress, ImageSize size, params FileManagerDirectoryContent[] data)
+        {
+            con = setSQLDBConnection();
+            FileStreamResult fileStreamResult;
+            byte[] fileContent;
+            con.Open();
+            SqlCommand myCommand = new SqlCommand("select * from " + TableName + " where Name = '" + path.Split("/").Last() + "'", con);
+            SqlDataReader myReader = myCommand.ExecuteReader();
+            while (myReader.Read())
+            {
+                fileContent = (byte[])myReader["Content"];
+                if (File.Exists(Path.Combine(Path.GetTempPath(), path.Split("/").Last())))
+                {
+                    File.Delete(Path.Combine(Path.GetTempPath(), path.Split("/").Last()));
+                }
+                using (Stream file = File.OpenWrite(Path.Combine(Path.GetTempPath(), path.Split("/").Last())))
+                {
+                    file.Write(fileContent, 0, fileContent.Length);
+                }
+                try
+                {
+                    FileStream fileStreamInput = new FileStream(Path.Combine(Path.GetTempPath(), path.Split("/").Last()), FileMode.Open, FileAccess.Read);
+                    fileStreamResult = new FileStreamResult(fileStreamInput, "APPLICATION/octet-stream");
+                    return fileStreamResult;
+                }
+                catch (Exception ex) { throw ex; }
+            }
+            con.Close();
+            return null;
         }
 
         public FileManagerResponse MoveTo(string path, string targetPath, string[] names, string[] replacedItemNames, params object[] data)
@@ -611,30 +657,49 @@ namespace Syncfusion.EJ2.FileManager.Base.SQLFileProvider
 
         public FileManagerResponse Rename(string path, string name, string newName, bool replace = false, params FileManagerDirectoryContent[] data)
         {
-            FileManagerResponse remvoeResponse = new FileManagerResponse();
+            FileManagerResponse renameResponse = new FileManagerResponse();
             try
             {
-                FileManagerDirectoryContent DeletedData = new FileManagerDirectoryContent();
+                FileManagerDirectoryContent renameData = new FileManagerDirectoryContent();
                 con = setSQLDBConnection();
                 try
                 {
                     con.Open();
-                    SqlCommand command = new SqlCommand(" update Product set Name='" + newName + "' where ItemID ='" + data[0].Id + "'", con);
-                    SqlDataReader reader = command.ExecuteReader();
-                    while (reader.Read())
+                    string updateQuery = "update " + this.TableName + " set Name='" + newName + "' where ItemID ='" + data[0].Id + "'";
+                    SqlCommand updatecommand = new SqlCommand(updateQuery, con);
+                    updatecommand.ExecuteNonQuery();
+                    con.Close();
+                    try
                     {
-                        DeletedData = new FileManagerDirectoryContent
+                        con.Open();
+                        string querystring = "select * from " + this.TableName + " where ItemID='" + data[0].Id + "'";
+                        SqlCommand cmdd = new SqlCommand(querystring, con);
+                        SqlDataReader reader = cmdd.ExecuteReader();
+                        while (reader.Read())
                         {
-                            Name = reader["Name"].ToString().Trim(),
-                            Size = (long)reader["Size"],
-                            IsFile = (bool)reader["IsFile"],
-                            DateModified = (DateTime)reader["DateModified"],
-                            DateCreated = (DateTime)reader["DateCreated"],
-                            Type = "",
-                            HasChild = (bool)reader["HasChild"]
-                        };
+                            renameData = new FileManagerDirectoryContent
+                            {
+                                Name = reader["Name"].ToString().Trim(),
+                                Size = (long)reader["Size"],
+                                FilterPath = data[0].FilterPath,
+                                IsFile = (bool)reader["IsFile"],
+                                DateModified = (DateTime)reader["DateModified"],
+                                DateCreated = (DateTime)reader["DateCreated"],
+                                Type = "",
+                                HasChild = (bool)reader["HasChild"]
+                            };
 
+                        }
                     }
+                    catch (SqlException ex)
+                    {
+                        Console.WriteLine(ex.ToString());
+                    }
+                    finally
+                    {
+                        con.Close();
+                    }
+
                 }
                 catch (SqlException ex)
                 {
@@ -645,18 +710,18 @@ namespace Syncfusion.EJ2.FileManager.Base.SQLFileProvider
                     con.Close();
 
                 }
-                var newData = new FileManagerDirectoryContent[] { DeletedData };
-                remvoeResponse.Files = newData;
-                return remvoeResponse;
+                var newData = new FileManagerDirectoryContent[] { renameData };
+                renameResponse.Files = newData;
+                return renameResponse;
             }
             catch (Exception e)
             {
                 ErrorDetails er = new ErrorDetails();
                 er.Code = "404";
                 er.Message = e.Message.ToString();
-                remvoeResponse.Error = er;
+                renameResponse.Error = er;
 
-                return remvoeResponse;
+                return renameResponse;
             }
         }
 
@@ -717,12 +782,6 @@ namespace Syncfusion.EJ2.FileManager.Base.SQLFileProvider
             }
         }
 
-        public FileManagerResponse Upload(string path, IList<IFormFile> uploadFiles, string action, string[] replacedItemNames, params object[] data)
-        {
-            throw new NotImplementedException();
-        }
-
-
         public FileManagerResponse CopyTo(string path, string targetPath, string[] names, string[] replacedItemNames, params FileManagerDirectoryContent[] data)
         {
             throw new NotImplementedException();
@@ -732,11 +791,7 @@ namespace Syncfusion.EJ2.FileManager.Base.SQLFileProvider
         {
             throw new NotImplementedException();
         }
-
-        public FileStreamResult GetImage(string path, bool allowCompress, ImageSize size, params FileManagerDirectoryContent[] data)
-        {
-            throw new NotImplementedException();
-        }
+      
     }
 }
 

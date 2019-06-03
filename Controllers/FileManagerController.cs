@@ -93,7 +93,7 @@ namespace EJ2APIServices.Controllers
         [Route("GetImage")]
         public IActionResult GetImage(FMParams args)
         {
-            return this.operation.GetImage(args.path, true);
+            return this.operation.GetImage(args.path,true, null, args.data);
         }       
     }
     public class FMParams
