@@ -9,6 +9,9 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Serialization;
 using Microsoft.Extensions.Configuration;
 using System.IO;
+using Microsoft.Win32;
+using System.IO.Compression;
+using System.Data;
 
 namespace Syncfusion.EJ2.FileManager.Base.SQLFileProvider
 {
@@ -138,7 +141,7 @@ namespace Syncfusion.EJ2.FileManager.Base.SQLFileProvider
                             IsFile = (bool)reader["IsFile"],
                             DateModified = (DateTime)reader["DateModified"],
                             DateCreated = (DateTime)reader["DateCreated"],
-                            Type = "",
+                            Type = GetDefaultExtension(reader["MimeType"].ToString()),
                             Id = reader["ItemID"].ToString(),
                             HasChild = (bool)reader["HasChild"]
                         };
@@ -187,7 +190,7 @@ namespace Syncfusion.EJ2.FileManager.Base.SQLFileProvider
                         DateCreated = (DateTime)reader["DateCreated"],
                         HasChild = (bool)reader["HasChild"],
                         FilterPath = data.Length != 0 ? path : "/",
-                        Type = "",
+                        Type = GetDefaultExtension(reader["MimeType"].ToString()),
                         Id = reader["ItemID"].ToString()
                     };
                     files.Add(childFiles);
@@ -206,6 +209,11 @@ namespace Syncfusion.EJ2.FileManager.Base.SQLFileProvider
             readResponse.Files = files;
             readResponse.CWD = cwd;
             return readResponse;
+        }
+
+        internal IActionResult GetImage(string path, bool v, object p, FileManagerDirectoryContent[] data)
+        {
+            throw new NotImplementedException();
         }
 
         public FileManagerResponse CopyTo(string path, string targetPath, string[] names, string[] replacedItemNames, params object[] data)
@@ -299,42 +307,79 @@ namespace Syncfusion.EJ2.FileManager.Base.SQLFileProvider
             }
         }
         private FileStreamResult fileStreamResult;
+        private List<String> files = new List<String> { };
         public FileStreamResult Download(string path, string[] names, params FileManagerDirectoryContent[] data)
         {
             if (data != null)
             {
                 byte[] fileContent;
                 con = setSQLDBConnection();
+                con.Open();
                 foreach (FileManagerDirectoryContent item in data)
                 {
-                    con.Open();
-                    SqlCommand myCommand = new SqlCommand("select * from " + TableName + " where ItemId =" + item.Id, con);
-                    SqlDataReader myReader = myCommand.ExecuteReader();
-                    while (myReader.Read())
+                    try
                     {
-                        fileContent = (byte[])myReader["Content"];
-                        if (File.Exists(Path.Combine(Path.GetTempPath(), names[0])))
+                        SqlCommand myCommand = new SqlCommand("select * from " + TableName + " where ItemId =" + item.Id, con);
+                        SqlDataReader myReader = myCommand.ExecuteReader();
+                        while (myReader.Read())
                         {
-                            File.Delete(Path.Combine(Path.GetTempPath(), names[0]));
+                            fileContent = (byte[])myReader["Content"];
+                            if (File.Exists(Path.Combine(Path.GetTempPath(), item.Name)))
+                            {
+                                File.Delete(Path.Combine(Path.GetTempPath(), item.Name));
+                            }
+                            using (Stream file = File.OpenWrite(Path.Combine(Path.GetTempPath(), item.Name)))
+                            {
+                                file.Write(fileContent, 0, fileContent.Length);
+                                if (files.IndexOf(item.Name) == -1)
+                                {
+                                    files.Add(item.Name);
+                                }
+                            }
                         }
-                        using (Stream file = File.OpenWrite(Path.Combine(Path.GetTempPath(), names[0])))
-                        {
-                            file.Write(fileContent, 0, fileContent.Length);
-                        }
-                        try
-                        {
-                            FileStream fileStreamInput = new FileStream(Path.Combine(Path.GetTempPath(), names[0]), FileMode.Open, FileAccess.Read);
-                            fileStreamResult = new FileStreamResult(fileStreamInput, "APPLICATION/octet-stream");
-                            fileStreamResult.FileDownloadName = data[0].Name;
-                        }
-                        catch (Exception ex) { throw ex; }
+                        myReader.Close();
                     }
-                    con.Close();
+                    catch (Exception ex) { throw ex; }
                 }
-            }
+                con.Close();
+                if (files.Count == 1)
+                        {
+                            try
+                            {
+                                FileStream fileStreamInput = new FileStream(Path.Combine(Path.GetTempPath(), files[0]), FileMode.Open, FileAccess.Read);
+                                fileStreamResult = new FileStreamResult(fileStreamInput, "APPLICATION/octet-stream");
+                                fileStreamResult.FileDownloadName = files[0];
+                            }
+                            catch (Exception ex) { throw ex; }
+                        }
+                        else
+                        {
+                            ZipArchiveEntry zipEntry;
+                            ZipArchive archive;
+                            var tempPath = Path.Combine(Path.GetTempPath(), "temp.zip");
+                            try
+                            {
+                                using (archive = ZipFile.Open(tempPath, ZipArchiveMode.Update))
+                                {
+                                    for (var i = 0; i < files.Count; i++)
+                                    {
+                                        zipEntry = archive.CreateEntryFromFile(Path.GetTempPath() + files[i], files[i], CompressionLevel.Fastest);
+                                    }
+                                    archive.Dispose();
+                                    FileStream fileStreamInput = new FileStream(tempPath, FileMode.Open, FileAccess.Read, FileShare.Delete);
+                                    fileStreamResult = new FileStreamResult(fileStreamInput, "APPLICATION/octet-stream");
+                                    fileStreamResult.FileDownloadName = "files.zip";
+                                    if (File.Exists(Path.Combine(Path.GetTempPath(), "temp.zip"))) ;
+                                    {
+                                        File.Delete(Path.Combine(Path.GetTempPath(), "temp.zip"));
+                                    }
+                                }
+                            }
+                            catch (Exception ex) { throw ex; }
+                        }
+                }
             return fileStreamResult;
         }
-
 
         public FileManagerResponse GetDetails(string path, string[] names, params FileManagerDirectoryContent[] data)
         {
@@ -363,7 +408,7 @@ namespace Syncfusion.EJ2.FileManager.Base.SQLFileProvider
                         detailFiles = new FileDetails
                         {
                             Name = reader["Name"].ToString().Trim(),
-                            Size = reader["Size"].ToString(),
+                            Size = byteConversion(long.Parse((reader["Size"]).ToString())),
                             IsFile = (bool)reader["IsFile"],
                             Modified = (DateTime)reader["DateModified"],
                             Created = (DateTime)reader["DateCreated"],
@@ -375,7 +420,7 @@ namespace Syncfusion.EJ2.FileManager.Base.SQLFileProvider
                         detailFiles = new FileDetails
                         {
                             Name = string.Join(", ", names),
-                            Size = reader["Size"].ToString(),
+                            Size = byteConversion(long.Parse((reader["Size"]).ToString())),
                             MultipleFiles = true,
                             Location = path
                         };
@@ -398,9 +443,68 @@ namespace Syncfusion.EJ2.FileManager.Base.SQLFileProvider
             return getDetailResponse;
         }
 
-        public FileStreamResult GetImage(string path, bool allowCompress, params object[] data)
+        public static string GetDefaultExtension(string mimeType)
         {
-            throw new NotImplementedException();
+            string result;
+            RegistryKey key;
+            object value;
+            key = Registry.ClassesRoot.OpenSubKey(@"MIME\Database\Content Type\" + mimeType.Trim(), false);
+            value = key != null ? key.GetValue("Extension", null) : null;
+            result = value != null ? value.ToString() : string.Empty;
+
+            return result;
+        }
+
+        public String byteConversion(long fileSize)
+        {
+            try
+            {
+                string[] index = { "B", "KB", "MB", "GB", "TB", "PB", "EB" }; //Longs run out around EB
+                if (fileSize == 0)
+                {
+                    return "0 " + index[0];
+                }
+
+                long bytes = Math.Abs(fileSize);
+                int loc = Convert.ToInt32(Math.Floor(Math.Log(bytes, 1024)));
+                double num = Math.Round(bytes / Math.Pow(1024, loc), 1);
+                return (Math.Sign(fileSize) * num).ToString() + " " + index[loc];
+            }
+            catch (Exception e)
+            {
+                throw e;
+            }
+        }
+
+        public FileStreamResult GetImage(string path,  bool allowCompress, ImageSize size, params FileManagerDirectoryContent[] data)
+        {
+            con = setSQLDBConnection();
+            FileStreamResult fileStreamResult;
+            byte[] fileContent;
+            con.Open();
+            SqlCommand myCommand = new SqlCommand("select * from " + TableName + " where Name = '" + path.Split("/").Last() + "'", con);
+            SqlDataReader myReader = myCommand.ExecuteReader();
+            while (myReader.Read())
+            {
+                fileContent = (byte[])myReader["Content"];
+                if (File.Exists(Path.Combine(Path.GetTempPath(), path.Split("/").Last())))
+                {
+                    File.Delete(Path.Combine(Path.GetTempPath(), path.Split("/").Last()));
+                }
+                using (Stream file = File.OpenWrite(Path.Combine(Path.GetTempPath(), path.Split("/").Last())))
+                {
+                    file.Write(fileContent, 0, fileContent.Length);
+                }
+                try
+                {
+                    FileStream fileStreamInput = new FileStream(Path.Combine(Path.GetTempPath(), path.Split("/").Last()), FileMode.Open, FileAccess.Read);
+                    fileStreamResult = new FileStreamResult(fileStreamInput, "APPLICATION/octet-stream");
+                    return fileStreamResult;
+                }
+                catch (Exception ex) { throw ex; }
+            }
+            con.Close();
+            return null;
         }
 
         public FileManagerResponse MoveTo(string path, string targetPath, string[] names, string[] replacedItemNames, params object[] data)
@@ -425,10 +529,10 @@ namespace Syncfusion.EJ2.FileManager.Base.SQLFileProvider
                         con.Open();
                         string parentIDQuery = "select ParentID from " + this.TableName + " where ItemID='" + file.Id + "'";
                         SqlCommand cmdd = new SqlCommand(parentIDQuery, con);
-                        SqlDataReader reader = cmdd.ExecuteReader();
-                        while (reader.Read())
+                        SqlDataReader idreader = cmdd.ExecuteReader();
+                        while (idreader.Read())
                         {
-                            ParentID = reader["ParentID"].ToString();
+                            ParentID = idreader["ParentID"].ToString();
                         }
 
                     }
@@ -489,7 +593,7 @@ namespace Syncfusion.EJ2.FileManager.Base.SQLFileProvider
                     {
                         con.Open();
                         SqlCommand DelCmd = new SqlCommand("delete  from " + this.TableName + " where ItemID='" + file.Id + "'", con);
-                        SqlDataReader DelRd = DelCmd.ExecuteReader();
+                        DelCmd.ExecuteNonQuery();
                     }
                     catch (SqlException ex)
                     {
@@ -503,6 +607,16 @@ namespace Syncfusion.EJ2.FileManager.Base.SQLFileProvider
                     newData.Add(DeletedData);
                     remvoeResponse.Files = newData;
                     updateTableOnDelete(deleteSubs.Distinct().ToArray());
+                    con.Close();
+                    if (this.deleteFilesId.Count > 0)
+                    {
+                        con.Open();
+                        string removeQuery = "delete from " + this.TableName + " where itemId IN ("+ string.Join(", ", this.deleteFilesId.Select(f => "'" + f + "'")) + ")";
+                        SqlCommand removeCommand = new SqlCommand(removeQuery, con);
+                        removeCommand.ExecuteNonQuery();
+                        this.deleteFilesId = null;
+                        con.Close();
+                    }
                 }
                 return remvoeResponse;
             }
@@ -519,26 +633,41 @@ namespace Syncfusion.EJ2.FileManager.Base.SQLFileProvider
         public void updateTableOnDelete(string[] ids)
         {
             con.Open();
-            foreach (var id in ids)
+            if(ids.Length == 0)
             {
-                if (this.deleteFilesId.IndexOf(id) == -1)
+                con.Close();
+            }
+            else
+            {
+                foreach (var id in ids)
                 {
-                    this.deleteFilesId.Add(id);
-                }
-                SqlCommand deleteSubs = new SqlCommand("select * from " + this.TableName + " where ParentID='" + id + "'", con);
-                SqlDataReader deleteSubsReader = deleteSubs.ExecuteReader();
-                while (deleteSubsReader.Read())
-                {
-                    this.deleteFilesId.Add(deleteSubsReader["ItemID"].ToString());
-                    if (!(bool)deleteSubsReader["IsFile"])
+                    if (this.deleteFilesId.IndexOf(id) == -1)
                     {
-                        con.Close();
-                        updateTableOnDelete(new[] { deleteSubsReader["ItemID"].ToString() });
+                        this.deleteFilesId.Add(id);
                     }
+                        try
+                        {
+                            SqlCommand deleteSubs = new SqlCommand("select * from " + this.TableName + " where ParentID='" + id + "'", con);
+                            SqlDataReader deleteSubsReader = deleteSubs.ExecuteReader();
+                            while (con.State != ConnectionState.Closed && !deleteSubsReader.IsClosed && deleteSubsReader.Read())
+                            {
+                                string subId = deleteSubsReader["ItemID"].ToString();
+                                this.deleteFilesId.Add(subId);
+                                if (!(bool)deleteSubsReader["IsFile"])
+                                {
+                                    con.Close();
+                                    updateTableOnDelete(new[] { subId });
+                                }
+                            }
+                        }
+                        catch (Exception e)
+                        {
+                            throw e;
+                        }
                 }
             }
-            con.Close();
         }
+
         public virtual FileManagerResponse Upload(string path, IList<IFormFile> uploadFiles, string action, string[] replacedItemNames, params FileManagerDirectoryContent[] data)
         {
             FileManagerResponse uploadResponse = new FileManagerResponse();
@@ -611,30 +740,49 @@ namespace Syncfusion.EJ2.FileManager.Base.SQLFileProvider
 
         public FileManagerResponse Rename(string path, string name, string newName, bool replace = false, params FileManagerDirectoryContent[] data)
         {
-            FileManagerResponse remvoeResponse = new FileManagerResponse();
+            FileManagerResponse renameResponse = new FileManagerResponse();
             try
             {
-                FileManagerDirectoryContent DeletedData = new FileManagerDirectoryContent();
+                FileManagerDirectoryContent renameData = new FileManagerDirectoryContent();
                 con = setSQLDBConnection();
                 try
                 {
                     con.Open();
-                    SqlCommand command = new SqlCommand(" update Product set Name='" + newName + "' where ItemID ='" + data[0].Id + "'", con);
-                    SqlDataReader reader = command.ExecuteReader();
-                    while (reader.Read())
+                    string updateQuery = "update " + this.TableName + " set Name='" + newName + "' where ItemID ='" + data[0].Id + "'";
+                    SqlCommand updatecommand = new SqlCommand(updateQuery, con);
+                    updatecommand.ExecuteNonQuery();
+                    con.Close();
+                    try
                     {
-                        DeletedData = new FileManagerDirectoryContent
+                        con.Open();
+                        string querystring = "select * from " + this.TableName + " where ItemID='" + data[0].Id + "'";
+                        SqlCommand cmdd = new SqlCommand(querystring, con);
+                        SqlDataReader reader = cmdd.ExecuteReader();
+                        while (reader.Read())
                         {
-                            Name = reader["Name"].ToString().Trim(),
-                            Size = (long)reader["Size"],
-                            IsFile = (bool)reader["IsFile"],
-                            DateModified = (DateTime)reader["DateModified"],
-                            DateCreated = (DateTime)reader["DateCreated"],
-                            Type = "",
-                            HasChild = (bool)reader["HasChild"]
-                        };
+                            renameData = new FileManagerDirectoryContent
+                            {
+                                Name = reader["Name"].ToString().Trim(),
+                                Size = (long)reader["Size"],
+                                FilterPath = data[0].FilterPath,
+                                IsFile = (bool)reader["IsFile"],
+                                DateModified = (DateTime)reader["DateModified"],
+                                DateCreated = (DateTime)reader["DateCreated"],
+                                Type = "",
+                                HasChild = (bool)reader["HasChild"]
+                            };
 
+                        }
                     }
+                    catch (SqlException ex)
+                    {
+                        Console.WriteLine(ex.ToString());
+                    }
+                    finally
+                    {
+                        con.Close();
+                    }
+
                 }
                 catch (SqlException ex)
                 {
@@ -645,18 +793,18 @@ namespace Syncfusion.EJ2.FileManager.Base.SQLFileProvider
                     con.Close();
 
                 }
-                var newData = new FileManagerDirectoryContent[] { DeletedData };
-                remvoeResponse.Files = newData;
-                return remvoeResponse;
+                var newData = new FileManagerDirectoryContent[] { renameData };
+                renameResponse.Files = newData;
+                return renameResponse;
             }
             catch (Exception e)
             {
                 ErrorDetails er = new ErrorDetails();
                 er.Code = "404";
                 er.Message = e.Message.ToString();
-                remvoeResponse.Error = er;
+                renameResponse.Error = er;
 
-                return remvoeResponse;
+                return renameResponse;
             }
         }
 
@@ -717,12 +865,6 @@ namespace Syncfusion.EJ2.FileManager.Base.SQLFileProvider
             }
         }
 
-        public FileManagerResponse Upload(string path, IList<IFormFile> uploadFiles, string action, string[] replacedItemNames, params object[] data)
-        {
-            throw new NotImplementedException();
-        }
-
-
         public FileManagerResponse CopyTo(string path, string targetPath, string[] names, string[] replacedItemNames, params FileManagerDirectoryContent[] data)
         {
             throw new NotImplementedException();
@@ -732,11 +874,7 @@ namespace Syncfusion.EJ2.FileManager.Base.SQLFileProvider
         {
             throw new NotImplementedException();
         }
-
-        public FileStreamResult GetImage(string path, bool allowCompress, ImageSize size, params FileManagerDirectoryContent[] data)
-        {
-            throw new NotImplementedException();
-        }
+      
     }
 }
 
