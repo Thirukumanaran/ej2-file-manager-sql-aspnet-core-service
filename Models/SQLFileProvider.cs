@@ -20,9 +20,9 @@ namespace Syncfusion.EJ2.FileManager.Base.SQLFileProvider
         string ConnectionString;
         string TableName;
         List<string> deleteFilesId = new List<string>();
+        List<string> checkedIDs = new List<string>();
         string RootId;
         SqlConnection con;
-        string SQLConnectionName;
         IConfiguration configuration;
 
 
@@ -381,6 +381,38 @@ namespace Syncfusion.EJ2.FileManager.Base.SQLFileProvider
             return fileStreamResult;
         }
 
+        public long getFolderSize(string[] idValue)
+        {
+            long sizeValue = 0;
+            con.Open();
+            foreach(var id in idValue)
+                {
+                this.checkedIDs.Add(id);
+                string removeQuery = "with cte as (select ItemID, Name, ParentID from " + this.TableName + " where ParentID =" + id + " union all select p.ItemID, p.Name, p.ParentID from Product p inner join cte on p.ParentID = cte.ItemID) select ItemID from cte;";
+                SqlCommand removeCommand = new SqlCommand(removeQuery, con);
+                SqlDataReader removeCommandReader = removeCommand.ExecuteReader();
+                while (removeCommandReader.Read())
+                {
+                    this.checkedIDs.Add(removeCommandReader["ItemID"].ToString());
+                }
+            }
+            con.Close();
+            if(this.checkedIDs.Count > 0)
+            {
+                con.Open();
+                string query = "select Size from " + this.TableName + " where ItemID IN (" + string.Join(", ", this.checkedIDs.Select(f => "'" + f + "'")) + ")";
+                SqlCommand getDetailsCommand = new SqlCommand(query, con);
+                SqlDataReader getDetailsCommandReader = getDetailsCommand.ExecuteReader();
+                while (getDetailsCommandReader.Read())
+                {
+                    sizeValue = sizeValue + long.Parse((getDetailsCommandReader["Size"]).ToString());
+                }
+                con.Close();
+            }
+            this.checkedIDs = null;
+            return sizeValue;
+        }
+
         public FileManagerResponse GetDetails(string path, string[] names, params FileManagerDirectoryContent[] data)
         {
             con = setSQLDBConnection();
@@ -398,6 +430,26 @@ namespace Syncfusion.EJ2.FileManager.Base.SQLFileProvider
 
             try
             {
+                string sizeValue = "";
+                var listOfStrings = new List<string>();
+                long size = 0;
+                long folderValue = 0;
+                if (!data[0].IsFile && names.Length == 1)
+                {
+                    string[] idArray = new string[] { data[0].Id };
+                    sizeValue = byteConversion(getFolderSize(idArray));
+                }
+                else
+                {
+                    foreach (var item in data)
+                    {
+                        if (!item.IsFile)
+                        {
+                            listOfStrings.Add(item.Id);
+                        }
+                    }
+                    folderValue = listOfStrings.Count > 0 ? getFolderSize(listOfStrings.ToArray()) : 0;
+                }
                 con.Open();
                 SqlCommand cmdd = new SqlCommand(querystring, con);
                 SqlDataReader reader = cmdd.ExecuteReader();
@@ -408,8 +460,8 @@ namespace Syncfusion.EJ2.FileManager.Base.SQLFileProvider
                         detailFiles = new FileDetails
                         {
                             Name = reader["Name"].ToString().Trim(),
-                            Size = byteConversion(long.Parse((reader["Size"]).ToString())),
                             IsFile = (bool)reader["IsFile"],
+                            Size = (bool)reader["IsFile"] ? byteConversion(long.Parse((reader["Size"]).ToString())) : sizeValue,
                             Modified = (DateTime)reader["DateModified"],
                             Created = (DateTime)reader["DateCreated"],
                             Location = path + names[0]
@@ -417,10 +469,19 @@ namespace Syncfusion.EJ2.FileManager.Base.SQLFileProvider
                     }
                     else
                     {
+                        foreach (var item in data)
+                        {
+                            if (item.IsFile)
+                            {
+                                size = size + item.Size;
+                            }  
+                        }
+                        long updatedLongIntValue = size + folderValue;
+                        sizeValue = byteConversion(updatedLongIntValue);
                         detailFiles = new FileDetails
                         {
                             Name = string.Join(", ", names),
-                            Size = byteConversion(long.Parse((reader["Size"]).ToString())),
+                            Size = sizeValue,
                             MultipleFiles = true,
                             Location = path
                         };
@@ -520,7 +581,7 @@ namespace Syncfusion.EJ2.FileManager.Base.SQLFileProvider
             {
                 FileManagerDirectoryContent DeletedData = new FileManagerDirectoryContent();
                 List<FileManagerDirectoryContent> newData = new List<FileManagerDirectoryContent>();
-                List<string> deleteSubs = new List<string>();
+
                 con = setSQLDBConnection();
                 foreach (var file in data)
                 {
@@ -576,7 +637,6 @@ namespace Syncfusion.EJ2.FileManager.Base.SQLFileProvider
                                 HasChild = (bool)reader["HasChild"],
                                 Id = reader["ItemID"].ToString()
                             };
-                            if (file.Name == DeletedData.Name) { deleteSubs.Add(DeletedData.Id); }
                         }
                     }
                     catch (SqlException ex)
@@ -606,18 +666,22 @@ namespace Syncfusion.EJ2.FileManager.Base.SQLFileProvider
                     }
                     newData.Add(DeletedData);
                     remvoeResponse.Files = newData;
-                    updateTableOnDelete(deleteSubs.Distinct().ToArray());
-                    con.Close();
-                    if (this.deleteFilesId.Count > 0)
-                    {
-                        con.Open();
-                        string removeQuery = "delete from " + this.TableName + " where itemId IN ("+ string.Join(", ", this.deleteFilesId.Select(f => "'" + f + "'")) + ")";
-                        SqlCommand removeCommand = new SqlCommand(removeQuery, con);
-                        removeCommand.ExecuteNonQuery();
-                        this.deleteFilesId = null;
-                        con.Close();
-                    }
                 }
+                con.Open();
+                string removeQuery = "with cte as (select ItemID, Name, ParentID from " + this.TableName + " where ParentID =" + data[0].Id + " union all select p.ItemID, p.Name, p.ParentID from Product p inner join cte on p.ParentID = cte.ItemID) select ItemID from cte;";
+                SqlCommand removeCommand = new SqlCommand(removeQuery, con);
+                SqlDataReader removeCommandReader = removeCommand.ExecuteReader();
+                while (removeCommandReader.Read())
+                {
+                    this.deleteFilesId.Add(removeCommandReader["ItemID"].ToString());
+                }
+                con.Close();
+                con.Open();
+                string query = "delete from " + this.TableName + " where ItemID IN (" + string.Join(", ", this.deleteFilesId.Select(f => "'" + f + "'")) + ")";
+                SqlCommand updateTableCommand = new SqlCommand(query, con);
+                SqlDataReader getDetailsCommandReader = updateTableCommand.ExecuteReader();
+                con.Close();
+                this.deleteFilesId = null;
                 return remvoeResponse;
             }
             catch (Exception e)
@@ -628,43 +692,6 @@ namespace Syncfusion.EJ2.FileManager.Base.SQLFileProvider
                 remvoeResponse.Error = er;
 
                 return remvoeResponse;
-            }
-        }
-        public void updateTableOnDelete(string[] ids)
-        {
-            con.Open();
-            if(ids.Length == 0)
-            {
-                con.Close();
-            }
-            else
-            {
-                foreach (var id in ids)
-                {
-                    if (this.deleteFilesId.IndexOf(id) == -1)
-                    {
-                        this.deleteFilesId.Add(id);
-                    }
-                        try
-                        {
-                            SqlCommand deleteSubs = new SqlCommand("select * from " + this.TableName + " where ParentID='" + id + "'", con);
-                            SqlDataReader deleteSubsReader = deleteSubs.ExecuteReader();
-                            while (con.State != ConnectionState.Closed && !deleteSubsReader.IsClosed && deleteSubsReader.Read())
-                            {
-                                string subId = deleteSubsReader["ItemID"].ToString();
-                                this.deleteFilesId.Add(subId);
-                                if (!(bool)deleteSubsReader["IsFile"])
-                                {
-                                    con.Close();
-                                    updateTableOnDelete(new[] { subId });
-                                }
-                            }
-                        }
-                        catch (Exception e)
-                        {
-                            throw e;
-                        }
-                }
             }
         }
 
@@ -842,6 +869,7 @@ namespace Syncfusion.EJ2.FileManager.Base.SQLFileProvider
                         DateModified = (DateTime)reader["DateModified"],
                         DateCreated = (DateTime)reader["DateCreated"],
                         Type = "",
+                        FilterPath = path + data[0].Name,
                         HasChild = (bool)reader["HasChild"],
                         Id = reader["ItemId"].ToString().Trim()
                     };
